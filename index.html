@@ -348,6 +348,35 @@ button { cursor:pointer; }
 .pt-info-edit-btn:hover { border-color:var(--navy); color:var(--navy); }
 
 /* ═══════════════════════════════════════════
+   DRAG & DROP
+═══════════════════════════════════════════ */
+.rx-entry[draggable="true"] { cursor: grab; }
+.rx-entry[draggable="true"]:active { cursor: grabbing; }
+.rx-entry.dragging {
+  opacity: .4; border-style: dashed; border-color: var(--gold);
+  transform: scale(.97);
+}
+.rx-entry .drag-handle {
+  position: absolute; left: -2px; top: 50%; transform: translateY(-50%);
+  color: rgba(0,0,0,.2); font-size: 14px; cursor: grab; padding: 0 4px;
+  line-height: 1; user-select: none;
+}
+.rx-entry:hover .drag-handle { color: var(--gold); }
+.pt-item.drag-over {
+  background: rgba(201,168,76,.25) !important;
+  border-left: 3px solid var(--gold) !important;
+  outline: 2px dashed var(--gold);
+}
+.pt-item.drag-over .pt-name { color: var(--gold-l) !important; }
+.drop-hint {
+  position: fixed; bottom: 70px; left: 50%; transform: translateX(-50%);
+  background: var(--navy); color: #fff; padding: 8px 18px; border-radius: 20px;
+  font-size: 13px; z-index: 500; display: none; pointer-events: none;
+  border: 2px dashed var(--gold);
+}
+.drop-hint.show { display: block; }
+
+/* ═══════════════════════════════════════════
    TOAST
 ═══════════════════════════════════════════ */
 .toast {
@@ -704,6 +733,7 @@ button { cursor:pointer; }
   </div>
 </div>
 
+<div class="drop-hint" id="dropHint">👤 환자 이름 위에 놓으면 이동합니다</div>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -799,7 +829,11 @@ function renderPatientList(filter) {
     const badges = types.map(t => `<span class="${badgeClass(t)}">${typeLabel(t)}</span>`).join('');
     const last = (p.rxList&&p.rxList.length) ? p.rxList[p.rxList.length-1] : null;
     const active = (id === selectedPatientId) ? ' active' : '';
-    return `<div class="pt-item${active}" onclick="selectPatient('${id}')">
+    return `<div class="pt-item${active}"
+      onclick="selectPatient('${id}')"
+      ondragover="onPatDragOver(event,'${id}')"
+      ondragleave="onPatDragLeave(event,'${id}')"
+      ondrop="onPatDrop(event,'${id}')">
       <div class="pt-name">${esc(p.name||'(무명)')}</div>
       <div class="pt-meta"><span>${last?last.date:''}</span><span>·</span><span>${(p.rxList||[]).length}건</span>${badges}</div>
     </div>`;
@@ -1475,8 +1509,13 @@ function showPatientView() {
     <button class="btn btn-danger" onclick="deletePatient('${selectedPatientId}')">환자 삭제</button>`;
   const entries = [...(pt.rxList||[])].reverse().map(r => {
     const active = (r.id === selectedRxId) ? ' selected' : '';
-    return `<div class="rx-entry${active}" onclick="selectRx('${r.id}')">
-      <div class="rx-date">${r.date||''}<span class="rx-type-badge ${badgeClass(r.type)}">${typeLabel(r.type)}</span></div>
+    return `<div class="rx-entry${active}"
+      draggable="true"
+      onclick="selectRx('${r.id}')"
+      ondragstart="onRxDragStart(event,'${selectedPatientId}','${r.id}')"
+      ondragend="onRxDragEnd(event)">
+      <span class="drag-handle" title="드래그하여 다른 환자로 이동">⠿</span>
+      <div class="rx-date" style="margin-left:14px;">${r.date||''}<span class="rx-type-badge ${badgeClass(r.type)}">${typeLabel(r.type)}</span></div>
       <div class="rx-vals">
         <span>OD: <strong>${r.od?.sph||'—'}</strong>/${r.od?.cyl||'—'}×${r.od?.axis||'—'}</span>
         <span>OS: <strong>${r.os?.sph||'—'}</strong>/${r.os?.cyl||'—'}×${r.os?.axis||'—'}</span>
@@ -2253,6 +2292,102 @@ function autoSyncToGS() {
     try { await fetch(gsUrl, {method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({data:db})}); }
     catch(e) { console.warn('자동 동기화 실패:', e.message); }
   }, 2000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DRAG & DROP — 처방전을 환자 사이에 이동
+// ═══════════════════════════════════════════════════════════════
+let _dragSrcPatId = null, _dragRxId = null;
+
+function onRxDragStart(e, patId, rxId) {
+  _dragSrcPatId = patId;
+  _dragRxId = rxId;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', rxId);
+  setTimeout(() => {
+    const el = e.target.closest('.rx-entry');
+    if (el) el.classList.add('dragging');
+    document.getElementById('dropHint').classList.add('show');
+  }, 0);
+}
+
+function onRxDragEnd(e) {
+  document.querySelectorAll('.rx-entry.dragging').forEach(el => el.classList.remove('dragging'));
+  document.querySelectorAll('.pt-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+  document.getElementById('dropHint').classList.remove('show');
+  _dragSrcPatId = null; _dragRxId = null;
+}
+
+function onPatDragOver(e, patId) {
+  if (!_dragRxId) return;
+  if (patId === _dragSrcPatId) return; // 같은 환자면 무시
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.querySelectorAll('.pt-item.drag-over').forEach(el => el.classList.remove('drag-over'));
+  // 해당 pt-item에 클래스 추가
+  e.currentTarget.classList.add('drag-over');
+}
+
+function onPatDragLeave(e, patId) {
+  e.currentTarget.classList.remove('drag-over');
+}
+
+function onPatDrop(e, targetPatId) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  document.getElementById('dropHint').classList.remove('show');
+
+  if (!_dragRxId || !_dragSrcPatId || targetPatId === _dragSrcPatId) return;
+
+  const srcPt  = db[_dragSrcPatId];
+  const tgtPt  = db[targetPatId];
+  if (!srcPt || !tgtPt) return;
+
+  const rxIdx = (srcPt.rxList||[]).findIndex(r => r.id === _dragRxId);
+  if (rxIdx === -1) return;
+
+  const rx = srcPt.rxList[rxIdx];
+  const srcName = srcPt.name, tgtName = tgtPt.name;
+  const rxInfo  = `${rx.date} ${typeLabel(rx.type)}`;
+
+  if (!confirm(`처방전을 이동합니다.
+
+📋 ${rxInfo}
+
+${srcName} → ${tgtName}
+
+계속하시겠습니까?`)) return;
+
+  // 이동 실행
+  srcPt.rxList.splice(rxIdx, 1);
+  tgtPt.rxList = tgtPt.rxList || [];
+  tgtPt.rxList.push(rx);
+  tgtPt.rxList.sort((a,b) => (a.date||'').localeCompare(b.date||''));
+
+  // 원본 환자 처방이 0건이면 삭제 여부 물음
+  if (srcPt.rxList.length === 0) {
+    if (confirm(`"${srcName}"의 처방이 모두 이동되었습니다.
+환자 기록도 삭제할까요?`)) {
+      delete db[_dragSrcPatId];
+      if (selectedPatientId === _dragSrcPatId) {
+        selectedPatientId = targetPatId;
+        selectedRxId = rx.id;
+      }
+    }
+  }
+
+  // 이동된 처방을 선택 상태로
+  if (selectedPatientId === _dragSrcPatId || selectedPatientId === targetPatId) {
+    selectedPatientId = targetPatId;
+    selectedRxId = rx.id;
+  }
+
+  saveData(); autoSyncToGS();
+  renderPatientList(document.getElementById('searchInput').value.trim());
+  updateCount();
+  showPatientView();
+  showToast(`✓ ${rxInfo} → ${tgtName} 이동 완료`, true);
+  _dragSrcPatId = null; _dragRxId = null;
 }
 
 // ═══════════════════════════════════════════════════════════════
